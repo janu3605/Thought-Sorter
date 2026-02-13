@@ -1,31 +1,145 @@
+// App.tsx
+import React, { useState, useRef } from 'react';
+import { StyleSheet, View, StatusBar, SafeAreaView } from 'react-native';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
+import { COLORS } from './src/constants/theme';
+import { StatusHeader } from './src/components/StatusHeader';
+import { IndustrialButton } from './src/components/IndustrialButton';
+import { ConsoleLog } from './src/components/ConsoleLog';
 
-// 1. Start Recording
-async function startRecording() {
-  try {
-    const { status } = await Audio.requestPermissionsAsync();
-    if (status !== 'granted') return;
+// --- CONFIGURATION ---
+const N8N_WEBHOOK_URL = 'YOUR_N8N_WEBHOOK_URL_HERE';
 
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-    const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-    setRecording(recording);
-  } catch (err) {
-    console.error('Failed to start recording', err);
+type AppState = 'IDLE' | 'RECORDING' | 'UPLOADING' | 'SUCCESS' | 'ERROR';
+
+export default function App() {
+  const [status, setStatus] = useState<AppState>('IDLE');
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [logs, setLogs] = useState<any[]>([]);
+
+  // Helper to add logs
+  const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    setLogs(prev => [...prev, {
+      id: Math.random().toString(),
+      timestamp,
+      message,
+      type
+    }]);
+  };
+
+  // 1. Start Recording
+  async function startRecording() {
+    try {
+      addLog('Requesting audio permissions...');
+      const permission = await Audio.requestPermissionsAsync();
+
+      if (permission.status !== 'granted') {
+        addLog('Permission denied.', 'error');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      addLog('Initializing audio stream...');
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      setRecording(recording);
+      setStatus('RECORDING');
+      addLog('Recording started.', 'success');
+    } catch (err) {
+      addLog(`Failed to start: ${err}`, 'error');
+      setStatus('ERROR');
+    }
   }
+
+  // 2. Stop & Upload
+  async function stopRecording() {
+    if (!recording) return;
+
+    setStatus('UPLOADING');
+    addLog('Stopping stream...');
+
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      addLog(`File captured at: ${uri}`);
+
+      if (!uri) throw new Error('No URI generated');
+
+      addLog('Initiating upload to n8n...');
+
+      // Upload Logic
+      const response = await FileSystem.uploadAsync(N8N_WEBHOOK_URL, uri, {
+        fieldName: 'data',
+        httpMethod: 'POST',
+      });
+
+      if (response.status >= 200 && response.status < 300) {
+        addLog('Upload complete. Processing...', 'success');
+        // Optional: Log the server response if it sends text back
+        if (response.body) addLog(`Server: ${response.body}`, 'info');
+        setStatus('SUCCESS');
+      } else {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+    } catch (err) {
+      addLog(`Upload failed: ${err}`, 'error');
+      setStatus('ERROR');
+    }
+
+    // Reset after delay
+    setRecording(null);
+    setTimeout(() => setStatus('IDLE'), 3000);
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.BACKGROUND} />
+      <View style={styles.container}>
+
+        {/* Header Section */}
+        <StatusHeader status={status} />
+
+        {/* Control Section */}
+        <View style={styles.centerStage}>
+          <IndustrialButton
+            isRecording={status === 'RECORDING'}
+            onPress={status === 'RECORDING' ? stopRecording : startRecording}
+            disabled={status === 'UPLOADING'}
+          />
+        </View>
+
+        {/* Log Section */}
+        <ConsoleLog logs={logs} />
+
+      </View>
+    </SafeAreaView>
+  );
 }
 
-// 2. Stop and Send to n8n
-async function stopAndSend() {
-  await recording.stopAndUnloadAsync();
-  const uri = recording.getURI(); // The local path to your audio file
-
-  // Upload to your n8n Webhook
-  const response = await FileSystem.uploadAsync('YOUR_N8N_WEBHOOK_URL', uri, {
-    fieldName: 'data', // This MUST match the Binary Property name in your n8n Webhook node
-    httpMethod: 'POST',
-    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-  });
-
-  console.log('Server Response:', response.body);
-}
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: COLORS.BACKGROUND,
+  },
+  container: {
+    flex: 1,
+    padding: 24,
+    backgroundColor: COLORS.BACKGROUND,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  centerStage: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
