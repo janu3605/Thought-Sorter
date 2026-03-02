@@ -2,14 +2,15 @@
 import React, { useState, useRef } from 'react';
 import { StyleSheet, View, StatusBar, SafeAreaView } from 'react-native';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { COLORS } from './src/constants/theme';
 import { StatusHeader } from './src/components/StatusHeader';
 import { IndustrialButton } from './src/components/IndustrialButton';
 import { ConsoleLog } from './src/components/ConsoleLog';
 
 // --- CONFIGURATION ---
-const N8N_WEBHOOK_URL = 'YOUR_N8N_WEBHOOK_URL_HERE';
+const N8N_WEBHOOK_URL = 'https://aureoline-deonna-overpopularly.ngrok-free.dev/webhook/voice-note';
 
 type AppState = 'IDLE' | 'RECORDING' | 'UPLOADING' | 'SUCCESS' | 'ERROR';
 
@@ -69,33 +70,66 @@ export default function App() {
     try {
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-      addLog(`File captured at: ${uri}`);
 
       if (!uri) throw new Error('No URI generated');
+      addLog(`File captured at: ${uri}`);
 
-      addLog('Initiating upload to n8n...');
+      addLog('Initiating upload...');
 
-      // Upload Logic
-      const response = await FileSystem.uploadAsync(N8N_WEBHOOK_URL, uri, {
-        fieldName: 'data',
-        httpMethod: 'POST',
-      });
+      let responseBody;
 
-      if (response.status >= 200 && response.status < 300) {
-        addLog('Upload complete. Processing...', 'success');
-        // Optional: Log the server response if it sends text back
-        if (response.body) addLog(`Server: ${response.body}`, 'info');
-        setStatus('SUCCESS');
+      // 🔀 BRANCH: WEB vs. MOBILE
+      if (Platform.OS === 'web') {
+        // --- WEB LOGIC ---
+        // 1. Fetch the file from the local browser URL
+        const response = await fetch(uri);
+        const blob = await response.blob();
+
+        // 2. Create a "File" object to attach the filename (Fixes the 3-argument error)
+        const file = new File([blob], 'recording.m4a', { type: 'audio/m4a' });
+
+        // 3. Append safely with just 2 arguments
+        const formData = new FormData();
+        formData.append('data', file);
+
+        // 4. Send to n8n
+        const upload = await fetch(N8N_WEBHOOK_URL, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (upload.ok) {
+          responseBody = await upload.text();
+        } else {
+          throw new Error(`Server returned ${upload.status}`);
+        }
+
       } else {
-        throw new Error(`Server returned ${response.status}`);
+        // --- MOBILE LOGIC (Using Expo FileSystem) ---
+        const response = await FileSystem.uploadAsync(N8N_WEBHOOK_URL, uri, {
+          fieldName: 'data',
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        });
+
+        if (response.status >= 200 && response.status < 300) {
+          responseBody = response.body;
+        } else {
+          throw new Error(`Server returned ${response.status}`);
+        }
       }
+
+      // Success Handling (Shared)
+      addLog('Upload complete. Processing...', 'success');
+      if (responseBody) addLog(`Server: ${responseBody}`, 'info');
+      setStatus('SUCCESS');
 
     } catch (err) {
       addLog(`Upload failed: ${err}`, 'error');
       setStatus('ERROR');
     }
 
-    // Reset after delay
+    // Reset
     setRecording(null);
     setTimeout(() => setStatus('IDLE'), 3000);
   }
