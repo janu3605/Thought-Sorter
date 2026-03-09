@@ -10,7 +10,8 @@ import { IndustrialButton } from './src/components/IndustrialButton';
 import { ConsoleLog } from './src/components/ConsoleLog';
 
 // --- CONFIGURATION ---
-const N8N_WEBHOOK_URL = 'https://aureoline-deonna-overpopularly.ngrok-free.dev/webhook/voice-note';
+// const N8N_WEBHOOK_URL ='https://[YOUR-NEW-NGROK-URL].ngrok-free.app/webhook/voice-note'
+const N8N_WEBHOOK_URL = 'https://aureoline-deonna-overpopularly.ngrok-free.dev/webhook-test/voice-note';
 
 type AppState = 'IDLE' | 'RECORDING' | 'UPLOADING' | 'SUCCESS' | 'ERROR';
 
@@ -95,6 +96,9 @@ export default function App() {
         // 4. Send to n8n
         const upload = await fetch(N8N_WEBHOOK_URL, {
           method: 'POST',
+          headers: {
+            'ngrok-skip-browser-warning': 'true', // <--- ADD THIS LINE
+          },
           body: formData,
         });
 
